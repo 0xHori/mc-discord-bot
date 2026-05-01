@@ -38,6 +38,51 @@ class ApplicationsBot(commands.Bot):
 bot = ApplicationsBot()
 
 
+class ApplicationModal(discord.ui.Modal, title="Заявка на сервер"):
+    minecraft_nick = discord.ui.TextInput(
+        label="Minecraft ник",
+        placeholder="Например: 0xHori",
+        max_length=32,
+        required=True,
+    )
+
+    age = discord.ui.TextInput(
+        label="Возраст",
+        placeholder="Например: 18",
+        max_length=3,
+        required=True,
+    )
+
+    experience = discord.ui.TextInput(
+        label="Опыт игры",
+        placeholder="Расскажи, как давно играешь и на каких серверах был",
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    reason = discord.ui.TextInput(
+        label="Почему хочешь попасть на сервер?",
+        placeholder="Коротко объясни мотивацию",
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    rules_agreement = discord.ui.TextInput(
+        label="Согласен с правилами?",
+        placeholder="Да / Нет",
+        max_length=20,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "Заявка получена. Позже она будет отправляться администрации.",
+            ephemeral=True,
+        )
+
+
 @bot.event
 async def on_ready():
     logging.info("Бот активирован: %s", bot.user)
@@ -47,6 +92,11 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await interaction.followup.send("Понг!", ephemeral=True)
+
+
+@bot.tree.command(name="apply", description="Подать заявку на сервер")
+async def apply(interaction: discord.Interaction):
+    await interaction.response.send_modal(ApplicationModal())
 
 
 async def main():
