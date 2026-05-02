@@ -140,10 +140,69 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
 
         embed.set_footer(text=f"Discord ID: {interaction.user.id}")
 
-        await staff_channel.send(embed=embed)
+        view = ApplicationReviewView()
+        await staff_channel.send(embed=embed, view=view)
 
         await interaction.followup.send(
             "Заявка отправлена администрации на рассмотрение.",
+            ephemeral=True,
+        )
+
+
+class ApplicationReviewView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.success)
+    async def accept(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self.process_decision(interaction, "accepted")
+
+    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.danger)
+    async def reject(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self.process_decision(interaction, "rejected")
+
+    async def process_decision(
+        self,
+        interaction: discord.Interaction,
+        decision: str,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.followup.send(
+                "У тебя нет прав для обработки заявок.",
+                ephemeral=True,
+            )
+            return
+
+        embed = interaction.message.embeds[0]
+
+        status_text = "Принята" if decision == "accepted" else "Отклонена"
+        color = discord.Color.green() if decision == "accepted" else discord.Color.red()
+
+        embed.color = color
+        embed.description = f"Статус: {status_text}"
+        embed.add_field(
+            name="Решение",
+            value=f"{status_text} модератором {interaction.user.mention}",
+            inline=False,
+        )
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.message.edit(embed=embed, view=self)
+
+        await interaction.followup.send(
+            f"Заявка отмечена как: {status_text}",
             ephemeral=True,
         )
 
