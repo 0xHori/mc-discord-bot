@@ -171,8 +171,19 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
             text=f"Application ID: {application_id} | User ID: {interaction.user.id}"
         )
 
-        view = ApplicationReviewView()
-        await staff_channel.send(embed=embed, view=view)
+        view = ApplicationReviewView(application_id=application_id)
+        staff_message = await staff_channel.send(embed=embed, view=view)
+
+        async with aiosqlite.connect("applications.db") as db:
+            await db.execute(
+                """
+                UPDATE applications
+                SET staff_message_id = ?
+                WHERE id = ?
+                """,
+                (staff_message.id, application_id),
+            )
+            await db.commit()
 
         await interaction.followup.send(
             "Заявка отправлена администрации на рассмотрение.",
@@ -181,8 +192,9 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
 
 
 class ApplicationReviewView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, application_id: int):
         super().__init__(timeout=None)
+        self.application_id = application_id
 
     @discord.ui.button(label="Принять", style=discord.ButtonStyle.success)
     async def accept(
@@ -214,6 +226,62 @@ class ApplicationReviewView(discord.ui.View):
             )
             return
 
+        async with aiosqlite.connect("applications.db") as db:
+            cursor = await db.execute(
+                """
+                SELECT status
+                FROM applications
+                WHERE id = ?
+                """,
+                (self.application_id,),
+            )
+            row = await cursor.fetchone()
+
+            if row is None:
+                await interaction.followup.send(
+                    "Заявка не найдена в базе данных.",
+                    ephemeral=True,
+                )
+                return
+
+            current_status = row[0]
+
+            if current_status != "pending":
+                await interaction.followup.send(
+                    f"Эта заявка уже обработана. Текущий статус: {current_status}",
+                    ephemeral=True,
+                )
+                return
+
+            await db.execute(
+                """
+                UPDATE applications
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (decision, self.application_id),
+            )
+
+            await db.execute(
+                """
+                INSERT INTO application_decisions (
+                    application_id,
+                    moderator_id,
+                    moderator_username,
+                    decision
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    self.application_id,
+                    interaction.user.id,
+                    str(interaction.user),
+                    decision,
+                ),
+            )
+
+            await db.commit()
+
         embed = interaction.message.embeds[0]
 
         status_text = "Принята" if decision == "accepted" else "Отклонена"
@@ -233,10 +301,9 @@ class ApplicationReviewView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
 
         await interaction.followup.send(
-            f"Заявка отмечена как: {status_text}",
+            f"Заявка #{self.application_id} отмечена как: {status_text}",
             ephemeral=True,
         )
-
 
 @bot.event
 async def on_ready():
@@ -267,9 +334,25 @@ async def init_db():
                 reason TEXT,
                 rules_agreement TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                staff_message_id INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS application_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id INTEGER NOT NULL,
+                moderator_id INTEGER NOT NULL,
+                moderator_username TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                comment TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (application_id) REFERENCES applications (id)
+            )
+        """)
+
         await db.commit()
 
 
