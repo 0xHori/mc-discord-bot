@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import aiosqlite
 
 import discord
 from discord import app_commands
@@ -80,6 +81,34 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        async with aiosqlite.connect("applications.db") as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO applications (
+                    discord_user_id,
+                    discord_username,
+                    minecraft_nick,
+                    age,
+                    experience,
+                    reason,
+                    rules_agreement,
+                    status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+                """,
+                (
+                    interaction.user.id,
+                    str(interaction.user),
+                    str(self.minecraft_nick),
+                    str(self.age),
+                    str(self.experience),
+                    str(self.reason),
+                    str(self.rules_agreement),
+                ),
+            )
+            await db.commit()
+            application_id = cursor.lastrowid
+
         if STAFF_CHANNEL_ID is None:
             await interaction.followup.send(
                 "Ошибка конфигурации: staff-канал не указан.",
@@ -97,7 +126,7 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
             return
 
         embed = discord.Embed(
-            title="Новая заявка на сервер",
+            title=f"Новая заявка #{application_id}",
             description="Статус: На рассмотрении",
             color=discord.Color.orange(),
         )
@@ -138,7 +167,9 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
             inline=False,
         )
 
-        embed.set_footer(text=f"Discord ID: {interaction.user.id}")
+        embed.set_footer(
+            text=f"Application ID: {application_id} | User ID: {interaction.user.id}"
+        )
 
         view = ApplicationReviewView()
         await staff_channel.send(embed=embed, view=view)
@@ -223,10 +254,30 @@ async def apply(interaction: discord.Interaction):
     await interaction.response.send_modal(ApplicationModal())
 
 
+async def init_db():
+    async with aiosqlite.connect("applications.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_user_id INTEGER NOT NULL,
+                discord_username TEXT NOT NULL,
+                minecraft_nick TEXT NOT NULL,
+                age TEXT,
+                experience TEXT,
+                reason TEXT,
+                rules_agreement TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
+
 async def main():
     if DISCORD_TOKEN is None:
         raise RuntimeError("DISCORD_TOKEN не указан в .env")
 
+    await init_db()
     await bot.start(DISCORD_TOKEN)
 
 
