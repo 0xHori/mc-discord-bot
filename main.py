@@ -356,6 +356,25 @@ async def ping(interaction: discord.Interaction):
 
 @bot.tree.command(name="apply", description="Подать заявку на сервер")
 async def apply(interaction: discord.Interaction):
+    latest_application = await get_latest_application_by_user(interaction.user.id)
+
+    if latest_application is not None:
+        application_id, status, created_at = latest_application
+
+        if status == "pending":
+            await interaction.response.send_message(
+                f"У тебя уже есть заявка #{application_id} на рассмотрении.",
+                ephemeral=True,
+            )
+            return
+
+        if status == "accepted":
+            await interaction.response.send_message(
+                f"Твоя заявка #{application_id} уже была принята.",
+                ephemeral=True,
+            )
+            return
+
     await interaction.response.send_modal(ApplicationModal())
 
 
@@ -375,6 +394,23 @@ async def get_application_user_id(application_id: int) -> int:
         raise ValueError(f"Application #{application_id} not found")
 
     return int(row[0])
+
+
+async def get_latest_application_by_user(discord_user_id: int):
+    async with aiosqlite.connect("applications.db") as db:
+        cursor = await db.execute(
+            """
+            SELECT id, status, created_at
+            FROM applications
+            WHERE discord_user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (discord_user_id,),
+        )
+        row = await cursor.fetchone()
+
+    return row
 
 
 async def init_db():
