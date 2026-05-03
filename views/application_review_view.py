@@ -74,6 +74,7 @@ class ApplicationReviewView(discord.ui.View):
         if decision == "accepted":
             await self.assign_accepted_role(interaction)
 
+        await self.notify_applicant(interaction, decision)
         await self.update_review_message(interaction, decision)
 
         status_text = "Принята" if decision == "accepted" else "Отклонена"
@@ -117,6 +118,42 @@ class ApplicationReviewView(discord.ui.View):
             role,
             reason=f"Заявка #{self.application_id} принята модератором {interaction.user}",
         )
+
+
+    async def notify_applicant(
+        self,
+        interaction: discord.Interaction,
+        decision: str,
+    ):
+        user_id = await get_application_user_id(self.application_id)
+
+        try:
+            user = await interaction.client.fetch_user(user_id)
+        except discord.NotFound:
+            await interaction.followup.send(
+                "Не удалось найти пользователя для отправки уведомления.",
+                ephemeral=True,
+            )
+            return
+
+        if decision == "accepted":
+            message = (
+                f"Твоя заявка #{self.application_id} на сервер была принята. "
+                "Добро пожаловать!"
+            )
+        else:
+            message = (
+                f"Твоя заявка #{self.application_id} на сервер была отклонена."
+            )
+
+        try:
+            await user.send(message)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Заявка обработана, но не удалось отправить пользователю ЛС.",
+                ephemeral=True,
+            )
+
 
     async def update_review_message(
         self,
