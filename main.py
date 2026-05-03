@@ -14,11 +14,13 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")
 STAFF_CHANNEL_ID = os.getenv("STAFF_CHANNEL_ID")
+ACCEPTED_ROLE_ID = os.getenv("ACCEPTED_ROLE_ID")
 
 
 class ApplicationsBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
+        intents.members = True
 
         super().__init__(
             command_prefix="!",
@@ -282,6 +284,42 @@ class ApplicationReviewView(discord.ui.View):
 
             await db.commit()
 
+        if decision == "accepted":
+            if ACCEPTED_ROLE_ID is None:
+                await interaction.followup.send(
+                    "Заявка принята, но ACCEPTED_ROLE_ID не указан в .env.",
+                    ephemeral=True,
+                )
+                return
+
+            role = interaction.guild.get_role(int(ACCEPTED_ROLE_ID))
+
+            if role is None:
+                await interaction.followup.send(
+                    "Заявка принята, но роль для выдачи не найдена.",
+                    ephemeral=True,
+                )
+                return
+
+            cursor_user_id = await get_application_user_id(self.application_id)
+
+            member = interaction.guild.get_member(cursor_user_id)
+
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(cursor_user_id)
+                except discord.NotFound:
+                    await interaction.followup.send(
+                        "Заявка принята, но пользователь не найден на сервере.",
+                        ephemeral=True,
+                    )
+                    return
+
+            await member.add_roles(
+                role,
+                reason=f"Заявка #{self.application_id} принята модератором {interaction.user}",
+            )
+
         embed = interaction.message.embeds[0]
 
         status_text = "Принята" if decision == "accepted" else "Отклонена"
@@ -319,6 +357,24 @@ async def ping(interaction: discord.Interaction):
 @bot.tree.command(name="apply", description="Подать заявку на сервер")
 async def apply(interaction: discord.Interaction):
     await interaction.response.send_modal(ApplicationModal())
+
+
+async def get_application_user_id(application_id: int) -> int:
+    async with aiosqlite.connect("applications.db") as db:
+        cursor = await db.execute(
+            """
+            SELECT discord_user_id
+            FROM applications
+            WHERE id = ?
+            """,
+            (application_id,),
+        )
+        row = await cursor.fetchone()
+
+    if row is None:
+        raise ValueError(f"Application #{application_id} not found")
+
+    return int(row[0])
 
 
 async def init_db():
