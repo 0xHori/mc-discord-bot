@@ -1,20 +1,27 @@
-import os
 import asyncio
 import logging
-import aiosqlite
 
 import discord
 from discord import app_commands
 from discord.ext import commands
-from dotenv import load_dotenv
 
+from config import (
+    DISCORD_TOKEN,
+    GUILD_ID,
+    STAFF_CHANNEL_ID,
+    ACCEPTED_ROLE_ID,
+)
 
-load_dotenv()
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")
-STAFF_CHANNEL_ID = os.getenv("STAFF_CHANNEL_ID")
-ACCEPTED_ROLE_ID = os.getenv("ACCEPTED_ROLE_ID")
+from database import (
+    init_db,
+    create_application,
+    set_staff_message_id,
+    get_application_status,
+    update_application_status,
+    create_moderation_decision,
+    get_application_user_id,
+    get_latest_application_by_user,
+)
 
 
 class ApplicationsBot(commands.Bot):
@@ -83,33 +90,15 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        async with aiosqlite.connect("applications.db") as db:
-            cursor = await db.execute(
-                """
-                INSERT INTO applications (
-                    discord_user_id,
-                    discord_username,
-                    minecraft_nick,
-                    age,
-                    experience,
-                    reason,
-                    rules_agreement,
-                    status
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
-                """,
-                (
-                    interaction.user.id,
-                    str(interaction.user),
-                    str(self.minecraft_nick),
-                    str(self.age),
-                    str(self.experience),
-                    str(self.reason),
-                    str(self.rules_agreement),
-                ),
-            )
-            await db.commit()
-            application_id = cursor.lastrowid
+        application_id = await create_application(
+            discord_user_id=interaction.user.id,
+            discord_username=str(interaction.user),
+            minecraft_nick=str(self.minecraft_nick),
+            age=str(self.age),
+            experience=str(self.experience),
+            reason=str(self.reason),
+            rules_agreement=str(self.rules_agreement),
+        )
 
         if STAFF_CHANNEL_ID is None:
             await interaction.followup.send(
@@ -176,16 +165,10 @@ class ApplicationModal(discord.ui.Modal, title="Заявка на сервер")
         view = ApplicationReviewView(application_id=application_id)
         staff_message = await staff_channel.send(embed=embed, view=view)
 
-        async with aiosqlite.connect("applications.db") as db:
-            await db.execute(
-                """
-                UPDATE applications
-                SET staff_message_id = ?
-                WHERE id = ?
-                """,
-                (staff_message.id, application_id),
-            )
-            await db.commit()
+        await set_staff_message_id(
+            application_id=application_id,
+            staff_message_id=staff_message.id,
+        )
 
         await interaction.followup.send(
             "Заявка отправлена администрации на рассмотрение.",
@@ -228,61 +211,32 @@ class ApplicationReviewView(discord.ui.View):
             )
             return
 
-        async with aiosqlite.connect("applications.db") as db:
-            cursor = await db.execute(
-                """
-                SELECT status
-                FROM applications
-                WHERE id = ?
-                """,
-                (self.application_id,),
+        row = await get_application_status(self.application_id)
+
+        if row is None:
+            await interaction.followup.send(
+                "Заявка не найдена в базе данных.",
+                ephemeral=True,
             )
-            row = await cursor.fetchone()
+            return
 
-            if row is None:
-                await interaction.followup.send(
-                    "Заявка не найдена в базе данных.",
-                    ephemeral=True,
-                )
-                return
+        current_status = row[0]
 
-            current_status = row[0]
-
-            if current_status != "pending":
-                await interaction.followup.send(
-                    f"Эта заявка уже обработана. Текущий статус: {current_status}",
-                    ephemeral=True,
-                )
-                return
-
-            await db.execute(
-                """
-                UPDATE applications
-                SET status = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (decision, self.application_id),
+        if current_status != "pending":
+            await interaction.followup.send(
+                f"Эта заявка уже обработана. Текущий статус: {current_status}",
+                ephemeral=True,
             )
+            return
 
-            await db.execute(
-                """
-                INSERT INTO application_decisions (
-                    application_id,
-                    moderator_id,
-                    moderator_username,
-                    decision
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    self.application_id,
-                    interaction.user.id,
-                    str(interaction.user),
-                    decision,
-                ),
-            )
+        await update_application_status(self.application_id, decision)
 
-            await db.commit()
+        await create_moderation_decision(
+            application_id=self.application_id,
+            moderator_id=interaction.user.id,
+            moderator_username=str(interaction.user),
+            decision=decision,
+        )
 
         if decision == "accepted":
             if ACCEPTED_ROLE_ID is None:
@@ -376,76 +330,6 @@ async def apply(interaction: discord.Interaction):
             return
 
     await interaction.response.send_modal(ApplicationModal())
-
-
-async def get_application_user_id(application_id: int) -> int:
-    async with aiosqlite.connect("applications.db") as db:
-        cursor = await db.execute(
-            """
-            SELECT discord_user_id
-            FROM applications
-            WHERE id = ?
-            """,
-            (application_id,),
-        )
-        row = await cursor.fetchone()
-
-    if row is None:
-        raise ValueError(f"Application #{application_id} not found")
-
-    return int(row[0])
-
-
-async def get_latest_application_by_user(discord_user_id: int):
-    async with aiosqlite.connect("applications.db") as db:
-        cursor = await db.execute(
-            """
-            SELECT id, status, created_at
-            FROM applications
-            WHERE discord_user_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (discord_user_id,),
-        )
-        row = await cursor.fetchone()
-
-    return row
-
-
-async def init_db():
-    async with aiosqlite.connect("applications.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS applications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_user_id INTEGER NOT NULL,
-                discord_username TEXT NOT NULL,
-                minecraft_nick TEXT NOT NULL,
-                age TEXT,
-                experience TEXT,
-                reason TEXT,
-                rules_agreement TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                staff_message_id INTEGER,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS application_decisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                application_id INTEGER NOT NULL,
-                moderator_id INTEGER NOT NULL,
-                moderator_username TEXT NOT NULL,
-                decision TEXT NOT NULL,
-                comment TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (application_id) REFERENCES applications (id)
-            )
-        """)
-
-        await db.commit()
 
 
 async def main():
