@@ -30,6 +30,14 @@ class ApplicationReviewView(discord.ui.View):
     ):
         await self.process_decision(interaction, "rejected")
 
+    @discord.ui.button(label="На доработку", style=discord.ButtonStyle.secondary)
+    async def revision(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self.process_decision(interaction, "revision")
+
     async def process_decision(
         self,
         interaction: discord.Interaction,
@@ -77,7 +85,7 @@ class ApplicationReviewView(discord.ui.View):
         await self.notify_applicant(interaction, decision)
         await self.update_review_message(interaction, decision)
 
-        status_text = "Принята" if decision == "accepted" else "Отклонена"
+        status_text = self.get_status_text(decision)
 
         await interaction.followup.send(
             f"Заявка #{self.application_id} отмечена как: {status_text}",
@@ -141,9 +149,14 @@ class ApplicationReviewView(discord.ui.View):
                 f"Твоя заявка #{self.application_id} на сервер была принята. "
                 "Добро пожаловать!"
             )
-        else:
+        elif decision == "rejected":
             message = (
                 f"Твоя заявка #{self.application_id} на сервер была отклонена."
+            )
+        else:
+            message = (
+                f"Твоя заявка #{self.application_id} отправлена на доработку. "
+                "Свяжись с администрацией или подай заявку повторно с более подробными ответами."
             )
 
         try:
@@ -162,8 +175,14 @@ class ApplicationReviewView(discord.ui.View):
     ):
         embed = interaction.message.embeds[0]
 
-        status_text = "Принята" if decision == "accepted" else "Отклонена"
-        color = discord.Color.green() if decision == "accepted" else discord.Color.red()
+        status_text = self.get_status_text(decision)
+        colors = {
+            "accepted": discord.Color.green(),
+            "rejected": discord.Color.red(),
+            "revision": discord.Color.blurple(),
+        }
+
+        color = colors.get(decision, discord.Color.light_grey())
 
         embed.color = color
         embed.description = f"Статус: {status_text}"
@@ -177,3 +196,12 @@ class ApplicationReviewView(discord.ui.View):
             item.disabled = True
 
         await interaction.message.edit(embed=embed, view=self)
+
+    def get_status_text(self, decision: str) -> str:
+        statuses = {
+            "accepted": "Принята",
+            "rejected": "Отклонена",
+            "revision": "На доработке",
+        }
+
+        return statuses.get(decision, decision)
